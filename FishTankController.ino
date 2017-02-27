@@ -1,8 +1,10 @@
+#include <Wire.h>
 #include <WiFiEsp.h>
 #include <WiFiEspClient.h>
 #include <WiFiEspServer.h>
 #include <WiFiEspUdp.h>
-
+#include <UTFT.h> 
+#include <URTouch.h>
 #include <TimeLib.h>
 #include <DS1307RTC.h>
 
@@ -10,12 +12,10 @@ const char ssid[] = "*************";  //  your network SSID (name)
 const char pass[] = "********";       // your network password
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
 time_t ntpTime;
+time_t rtcTime;
 // NTP Servers:
-static const char ntpServerName[] = "us.pool.ntp.org";
+static const char ntpServerName[] = "de.pool.ntp.org";
 //static const char ntpServerName[] = "time.nist.gov";
-//static const char ntpServerName[] = "time-a.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-b.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-c.timefreq.bldrdoc.gov";
 
 const int timeZone = 1;     // Central European Time
 unsigned int localPort = 2390;  // local port to listen for UDP packets
@@ -25,16 +25,22 @@ const int UDP_TIMEOUT = 2000;    // timeout in miliseconds to wait for an UDP pa
 byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
 
 
+UTFT    myGLCD(ILI9341_16,38,39,40,41); //Parameters should be adjusted to your Display/Shield model
+URTouch  myTouch( 6, 5, 4, 3, 2);
 WiFiEspUDP Udp;
 
 void setup() {
+  // Initial setup
+  myGLCD.InitLCD();
+  myGLCD.clrScr();
+  myTouch.InitTouch();
+  myTouch.setPrecision(PREC_MEDIUM);
+  
   Serial.begin(115200);
   delay(250);
    Serial1.begin(9600);
   // initialize ESP module
   WiFi.init(&Serial1);
-  
-  //#Serial.println("TimeNTP Example");
 
   // check for the presence of the shield
   if (WiFi.status() == WL_NO_SHIELD) {
@@ -58,11 +64,6 @@ void setup() {
   Serial.println("Starting UDP");
   Udp.begin(localPort);
   
-  //#Serial.println("waiting for sync");
-  
-  //#setSyncProvider(getNtpTime);
-  //#setSyncInterval(300);
-  
 
 }
 
@@ -71,6 +72,7 @@ void loop() {
     ntpTime = receiveNTPPacket();
     if (ntpTime != 0){
       setTime(ntpTime);
+      RTC.set(ntpTime); // Setzt den DS1307RTC
     }
   }
 
