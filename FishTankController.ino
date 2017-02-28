@@ -7,6 +7,10 @@
 #include <URTouch.h>
 #include <TimeLib.h>
 #include <DS1307RTC.h>
+#include <RCSwitch.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
 
 const char ssid[] = "*************";  //  your network SSID (name)
 const char pass[] = "********";       // your network password
@@ -27,20 +31,28 @@ byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing pack
 
 UTFT    myGLCD(ILI9341_16,38,39,40,41); //Parameters should be adjusted to your Display/Shield model
 URTouch  myTouch( 6, 5, 4, 3, 2);
+RCSwitch mySwitch = RCSwitch();
+OneWire oneWire(11);   //Change Pin
+DallasTemperature tempSensor(&oneWire);
 WiFiEspUDP Udp;
 
+/*
+ * Setup initierung
+ */
 void setup() {
   // Initial setup
   myGLCD.InitLCD();
   myGLCD.clrScr();
   myTouch.InitTouch();
   myTouch.setPrecision(PREC_MEDIUM);
-  
-  Serial.begin(115200);
+
+  Serial.begin(115200); //startet seriellen Monitor
   delay(250);
-   Serial1.begin(9600);
-  // initialize ESP module
-  WiFi.init(&Serial1);
+  
+  mySwitch.enableTransmit(10); //Change pin
+
+  Serial1.begin(9600);
+  WiFi.init(&Serial1); // initialize ESP module 
 
   // check for the presence of the shield
   if (WiFi.status() == WL_NO_SHIELD) {
@@ -57,14 +69,13 @@ void setup() {
   }
   
   Serial.println("Connected to wifi");
-  printWifiStatus();
+  printWifiStatus(); //WifiStatus wiedergeben
 
   Serial.print("IP number assigned by DHCP is ");
   Serial.println(WiFi.localIP());
   Serial.println("Starting UDP");
-  Udp.begin(localPort);
-  
-
+  Udp.begin(localPort); //UDP staten
+  tempSensor.begin(); //Starten des Temperatursensors
 }
 
 void loop() {
@@ -78,7 +89,11 @@ void loop() {
 
 }
 
-// print the SSID of the network you're attached to
+/*
+ * Gibt die SSID und die IP-Adresse wieder
+ * 
+ * TODO: Static IP
+ */
 void printWifiStatus() {
   // print the SSID  
   Serial.print("SSID: ");
@@ -96,7 +111,10 @@ void printWifiStatus() {
   Serial.println(" dBm");
 }
 
-
+/*
+ * Startet das Senden einer NTP Anfrage und verarbeitet die Antwort. 
+ * Werte werden als time_t gespeichert zurückgegeben.
+ */
 time_t receiveNTPPacket()
 {
   sendNTPpacket(ntpServerName); // send an NTP packet to a time server
@@ -124,7 +142,9 @@ time_t receiveNTPPacket()
 }
 
 
-// send an NTP request to the time server at the given address
+/* 
+ *  send an NTP request to the time server at the given address via UDP
+ */
 void sendNTPpacket(char *ntpSrv)
 {
   // set all bytes in the buffer to 0
@@ -150,3 +170,13 @@ void sendNTPpacket(char *ntpSrv)
 
   Udp.endPacket();
 }
+
+/*
+ * Liest die aktuelle Temperatur
+ */
+ float readTemp() {
+  tempSensor.requestTemperatures();
+  float celsius = tempSensor.getTempCByIndex(0);
+  return celsius;
+ }
+
