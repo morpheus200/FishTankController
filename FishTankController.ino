@@ -1,3 +1,4 @@
+#include <SD.h>
 #include <Wire.h>
 #include <WiFiEsp.h>
 #include <WiFiEspClient.h>
@@ -10,27 +11,49 @@
 #include <RCSwitch.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <EEPROM.h>
 
 
 const char ssid[] = "*************";  //  your network SSID (name)
 const char pass[] = "********";       // your network password
+const IPAddress ownIP(192,168,177,66); //Change own IP
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
+
+////////////////////////////////////////////NTP ///////////////////////////////////////
 time_t ntpTime;
 time_t rtcTime;
 // NTP Servers:
 static const char ntpServerName[] = "de.pool.ntp.org";
 //static const char ntpServerName[] = "time.nist.gov";
-
 const int timeZone = 1;     // Central European Time
 unsigned int localPort = 2390;  // local port to listen for UDP packets
-
 const int NTP_PACKET_SIZE = 48;  // NTP timestamp is in the first 48 bytes of the message
 const int UDP_TIMEOUT = 2000;    // timeout in miliseconds to wait for an UDP packet to arrive
 byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
+///////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////// PH Probe //////////////////////
+#define EEPROM_write(address, p) {int i = 0; byte *pp = (byte*)&(p);for(; i < sizeof(p); i++) EEPROM.write(address+i, pp[i]);}
+#define EEPROM_read(address, p)  {int i = 0; byte *pp = (byte*)&(p);for(; i < sizeof(p); i++) pp[i]=EEPROM.read(address+i);}
+
+#define ReceivedBufferLength 20
+char receivedBuffer[ReceivedBufferLength+1];   // store the serial command
+byte receivedBufferIndex = 0;
+
+#define SCOUNT  30           // sum of sample point
+int analogBuffer[SCOUNT];    //store the sample voltage
+int analogBufferIndex = 0;
+
+#define SlopeValueAddress 0     // (slope of the ph probe)store at the beginning of the EEPROM. The slope is a float number,occupies 4 bytes.
+#define InterceptValueAddress (SlopeValueAddress+4) 
+float slopeValue, interceptValue, averageVoltage;
+boolean enterCalibrationFlag = 0;
+//////////////////////////////////////////////////////////////////////////////////////
 
 
 UTFT    myGLCD(ILI9341_16,38,39,40,41); //Parameters should be adjusted to your Display/Shield model
 URTouch  myTouch( 6, 5, 4, 3, 2);
+extern uint8_t BigFont[];
 RCSwitch mySwitch = RCSwitch();
 OneWire oneWire(11);   //Change Pin
 DallasTemperature tempSensor(&oneWire);
@@ -52,6 +75,7 @@ void setup() {
   mySwitch.enableTransmit(10); //Change pin
 
   Serial1.begin(9600);
+  WiFi.config(ownIP);
   WiFi.init(&Serial1); // initialize ESP module 
 
   // check for the presence of the shield
@@ -179,4 +203,143 @@ void sendNTPpacket(char *ntpSrv)
   float celsius = tempSensor.getTempCByIndex(0);
   return celsius;
  }
+
+ /*
+  * 
+  */
+boolean serialDataAvailable(void)
+{
+  char receivedChar;
+  static unsigned long receivedTimeOut = millis();
+  while (Serial.available()>0) 
+  {   
+    if (millis() - receivedTimeOut > 1000U) 
+    {
+      receivedBufferIndex = 0;
+      memset(receivedBuffer,0,(ReceivedBufferLength+1));
+    }
+    receivedTimeOut = millis();
+    receivedChar = Serial.read();
+    if (receivedChar == '\n' || receivedBufferIndex==ReceivedBufferLength){
+    receivedBufferIndex = 0;
+    strupr(receivedBuffer);
+    return true;
+    }
+    else{
+      receivedBuffer[receivedBufferIndex] = receivedChar;
+      receivedBufferIndex++;
+    }
+  }
+  return false;
+}
+
+/*
+ * 
+ */
+int getMedianNum(int bArray[], int iFilterLen) 
+{
+      int bTab[iFilterLen];
+      for (byte i = 0; i<iFilterLen; i++)
+      {
+    bTab[i] = bArray[i];
+      }
+      int i, j, bTemp;
+      for (j = 0; j < iFilterLen - 1; j++) 
+      {
+    for (i = 0; i < iFilterLen - j - 1; i++) 
+          {
+      if (bTab[i] > bTab[i + 1]) 
+            {
+    bTemp = bTab[i];
+          bTab[i] = bTab[i + 1];
+    bTab[i + 1] = bTemp;
+       }
+    }
+      }
+      if ((iFilterLen & 1) > 0)
+  bTemp = bTab[(iFilterLen - 1) / 2];
+      else
+  bTemp = (bTab[iFilterLen / 2] + bTab[iFilterLen / 2 - 1]) / 2;
+      return bTemp;
+}
+
+/*
+ * 
+ */
+void readCharacteristicValues()
+{
+    EEPROM_read(SlopeValueAddress, slopeValue);
+    EEPROM_read(InterceptValueAddress, interceptValue);
+    if(EEPROM.read(SlopeValueAddress)==0xFF && EEPROM.read(SlopeValueAddress+1)==0xFF && EEPROM.read(SlopeValueAddress+2)==0xFF && EEPROM.read(SlopeValueAddress+3)==0xFF)
+    {
+      slopeValue = 3.5;   // If the EEPROM is new, the recommendatory slope is 3.5.
+      EEPROM_write(SlopeValueAddress, slopeValue);
+    }
+    if(EEPROM.read(InterceptValueAddress)==0xFF && EEPROM.read(InterceptValueAddress+1)==0xFF && EEPROM.read(InterceptValueAddress+2)==0xFF && EEPROM.read(InterceptValueAddress+3)==0xFF)
+    {
+      interceptValue = 0;  // If the EEPROM is new, the recommendatory intercept is 0.
+      EEPROM_write(InterceptValueAddress, interceptValue);
+    }
+}
+
+ 
+
+ /*
+  * Home Screen
+  */
+void drawHomeScreen() {
+  myGLCD.clrScr();
+  myGLCD.setBackColor(0,0,0); //Schwarzer hintergrund
+  
+}
+
+/*
+ * 
+ */
+void calibrtionSelectScreen() {
+  myGLCD.clrScr();
+  myGLCD.setBackColor(0,0,0); //Schwarzer hintergrund
+  myGLCD.setFont(BigFont); // Sets font to big
+  myGLCD.print("PH Calibration", CENTER, 10); // Prints the string on the screen
+  myGLCD.setColor(255, 0, 0); // Sets color to red
+  myGLCD.drawLine(0,32,319,32); // Draws the red line
+  myGLCD.setColor(255, 255, 255); // Sets color to white
+  readCharacteristicValues();
+  
+
+  // Button -Back
+  myGLCD.setColor(16, 167, 103); // Sets green color
+  myGLCD.fillRoundRect (35, 90, 285, 130); // Draws filled rounded rectangle
+  myGLCD.setColor(255, 255, 255); // Sets color to white
+  myGLCD.drawRoundRect (35, 90, 285, 130); // Draws rounded rectangle without a fill, so the overall appearance of the button looks like it has a frame
+  myGLCD.setFont(BigFont); // Sets the font to big
+  myGLCD.setBackColor(16, 167, 103); // Sets the background color of the area where the text will be printed to green, same as the button
+  myGLCD.print("Back", CENTER, 102); // Prints the string
+  drawHomeScreen();  
+}
+
+/*
+ * 
+ */
+void calibrationScreen() {
+  myGLCD.clrScr();
+  myGLCD.setBackColor(0,0,0); //Schwarzer hintergrund
+
+  //Button ACID
+  myGLCD.setFont(BigFont); // Sets font to big
+  myGLCD.print("ACID", CENTER, 10); // Prints the string on the screen
+  myGLCD.setColor(255, 0, 0); // Sets color to red
+  myGLCD.drawLine(0,32,319,32); // Draws the red line
+  myGLCD.setColor(255, 255, 255); // Sets color to white
+  
+
+  // Button -ALKALI
+  myGLCD.setColor(16, 167, 103); // Sets green color
+  myGLCD.fillRoundRect (35, 90, 285, 130); // Draws filled rounded rectangle
+  myGLCD.setColor(255, 255, 255); // Sets color to white
+  myGLCD.drawRoundRect (35, 90, 285, 130); // Draws rounded rectangle without a fill, so the overall appearance of the button looks like it has a frame
+  myGLCD.setFont(BigFont); // Sets the font to big
+  myGLCD.setBackColor(16, 167, 103); // Sets the background color of the area where the text will be printed to green, same as the button
+  myGLCD.print("ALKALI", CENTER, 102); // Prints the string
+}
 
