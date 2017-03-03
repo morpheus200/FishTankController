@@ -47,7 +47,13 @@ int analogBufferIndex = 0;
 #define SlopeValueAddress 0     // (slope of the ph probe)store at the beginning of the EEPROM. The slope is a float number,occupies 4 bytes.
 #define InterceptValueAddress (SlopeValueAddress+4) 
 float slopeValue, interceptValue, averageVoltage;
-boolean enterCalibrationFlag = 0;
+//boolean enterCalibrationFlag = 0;
+#define PHPin A0
+#define VREF 5000  //for arduino uno, the ADC reference is the power(AVCC), that is 5000mV
+
+static byte acidCalibrationFinish = 0, alkaliCalibrationFinish = 0;
+static float acidValue,alkaliValue;
+static float acidVoltage,alkaliVoltage;
 //////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -71,11 +77,12 @@ void setup() {
 
   Serial.begin(115200); //startet seriellen Monitor
   delay(250);
-  
-  mySwitch.enableTransmit(10); //Change pin
+
+  readCharacteristicValues(); //Lesen der Chrakteritstichen Werte für PH-Messung aus EEPROM
+  mySwitch.enableTransmit(10); //433MHz sender einschalten Change pin
 
   Serial1.begin(9600);
-  WiFi.config(ownIP);
+  WiFi.config(ownIP); //WIFi mir eigener IP starten
   WiFi.init(&Serial1); // initialize ESP module 
 
   // check for the presence of the shield
@@ -116,7 +123,6 @@ void loop() {
 /*
  * Gibt die SSID und die IP-Adresse wieder
  * 
- * TODO: Static IP
  */
 void printWifiStatus() {
   // print the SSID  
@@ -234,7 +240,8 @@ boolean serialDataAvailable(void)
 }
 
 /*
- * 
+ * Median Filter Algorithmus um stabilen Wert zu erhalten
+ * Für Mittelwert der Spannung bei der PH Messung
  */
 int getMedianNum(int bArray[], int iFilterLen) 
 {
@@ -264,7 +271,7 @@ int getMedianNum(int bArray[], int iFilterLen)
 }
 
 /*
- * 
+ * Lessen der Characteristischen Werte um den PH-Wert zu bestimmen
  */
 void readCharacteristicValues()
 {
@@ -282,7 +289,25 @@ void readCharacteristicValues()
     }
 }
 
- 
+/*
+ * PH Wert Messen und ausgeben
+ */
+
+int meassurePH ()
+{
+  static unsigned long sampleTimepoint = millis();
+  if(millis()-sampleTimepoint>40U)
+  {
+    sampleTimepoint = millis();
+    analogBuffer[analogBufferIndex] = analogRead(PHPin)/1024.0*VREF;    //read the voltage and store into the buffer,every 40ms
+    analogBufferIndex++;
+     if(analogBufferIndex == SCOUNT) 
+         analogBufferIndex = 0;
+    averageVoltage = getMedianNum(analogBuffer,SCOUNT);   // read the stable value by the median filtering algorithm
+  }
+
+  return (averageVoltage/1000.0*slopeValue+interceptValue);
+}
 
  /*
   * Home Screen
@@ -304,7 +329,6 @@ void calibrtionSelectScreen() {
   myGLCD.setColor(255, 0, 0); // Sets color to red
   myGLCD.drawLine(0,32,319,32); // Draws the red line
   myGLCD.setColor(255, 255, 255); // Sets color to white
-  readCharacteristicValues();
   
 
   // Button -Back
@@ -322,24 +346,79 @@ void calibrtionSelectScreen() {
  * 
  */
 void calibrationScreen() {
+  float acidValueTemp,alkaliValueTemp,newSlopeValue,newInterceptValue;
+  char *receivedBufferPtr;
+  
   myGLCD.clrScr();
   myGLCD.setBackColor(0,0,0); //Schwarzer hintergrund
-
-  //Button ACID
-  myGLCD.setFont(BigFont); // Sets font to big
-  myGLCD.print("ACID", CENTER, 10); // Prints the string on the screen
-  myGLCD.setColor(255, 0, 0); // Sets color to red
-  myGLCD.drawLine(0,32,319,32); // Draws the red line
-  myGLCD.setColor(255, 255, 255); // Sets color to white
+  if (!acidCalibrationFinish)
+  {
+    //Button ACID
+    myGLCD.setColor(16, 167, 103); // Sets green color
+    myGLCD.fillRoundRect (35, 90, 285, 130); // Draws filled rounded rectangle
+    myGLCD.setColor(255, 255, 255); // Sets color to white
+    myGLCD.drawRoundRect (35, 90, 285, 130); // Draws rounded rectangle without a fill, so the overall appearance of the button looks like it has a frame
+    myGLCD.setFont(BigFont); // Sets the font to big
+    myGLCD.setBackColor(16, 167, 103); // Sets the background color of the area where the text will be printed to green, same as the button
+    myGLCD.print("ACID", CENTER, 102); // Prints the string
+    
+    /// Starten der Kalibrierung mit ACID 4.0
+    receivedBufferPtr=strstr(receivedBuffer, "ACID:");
+    receivedBufferPtr+=strlen("ACID:");
+    acidValueTemp = strtod(receivedBufferPtr,NULL);
+    if((acidValueTemp>3)&&(acidValueTemp<5))        //typical ph value of acid standand buffer solution should be 4.00
+    {
+       acidValue = acidValueTemp;
+       acidVoltage = averageVoltage/1000.0;        // mV -> V
+       acidCalibrationFinish = 1;
+       Serial.println(F("Acid Calibration Successful"));
+     }else {
+       acidCalibrationFinish = 0;
+       Serial.println(F("Acid Value Error"));
+     }
+     calibrationScreen();
+  }
   
+  if (!alkaliCalibrationFinish)
+  {
+    // Button -ALKALI
+    myGLCD.setColor(16, 167, 103); // Sets green color
+    myGLCD.fillRoundRect (35, 90, 285, 130); // Draws filled rounded rectangle
+    myGLCD.setColor(255, 255, 255); // Sets color to white
+    myGLCD.drawRoundRect (35, 90, 285, 130); // Draws rounded rectangle without a fill, so the overall appearance of the button looks like it has a frame
+    myGLCD.setFont(BigFont); // Sets the font to big
+    myGLCD.setBackColor(16, 167, 103); // Sets the background color of the area where the text will be printed to green, same as the button
+    myGLCD.print("ALKALI", CENTER, 102); // Prints the string
+    
+    //// Starten der Kalibrierung mit ALKALI 10.0
+    receivedBufferPtr=strstr(receivedBuffer, "ALKALI:");
+    receivedBufferPtr+=strlen("ALKALI:");
+    alkaliValueTemp = strtod(receivedBufferPtr,NULL);
+    if((alkaliValueTemp>8)&&(alkaliValueTemp<11))        //typical ph value of alkali standand buffer solution should be 9.18 or 10.01
+    {
+        alkaliValue = alkaliValueTemp;
+        alkaliVoltage = averageVoltage/1000.0;
+        alkaliCalibrationFinish = 1;
+        Serial.println(F("Alkali Calibration Successful"));
+    }else{
+        alkaliCalibrationFinish = 0;
+        Serial.println(F("Alkali Value Error"));
+    }
+    calibrationScreen();   
+  }
 
-  // Button -ALKALI
-  myGLCD.setColor(16, 167, 103); // Sets green color
-  myGLCD.fillRoundRect (35, 90, 285, 130); // Draws filled rounded rectangle
-  myGLCD.setColor(255, 255, 255); // Sets color to white
-  myGLCD.drawRoundRect (35, 90, 285, 130); // Draws rounded rectangle without a fill, so the overall appearance of the button looks like it has a frame
-  myGLCD.setFont(BigFont); // Sets the font to big
-  myGLCD.setBackColor(16, 167, 103); // Sets the background color of the area where the text will be printed to green, same as the button
-  myGLCD.print("ALKALI", CENTER, 102); // Prints the string
+  if(acidCalibrationFinish && alkaliCalibrationFinish)
+  {
+    newSlopeValue = (acidValue-alkaliValue)/(acidVoltage - alkaliVoltage); // Slope berechnen
+    EEPROM_write(SlopeValueAddress, newSlopeValue); //Schreiben des neuen Slope
+    newInterceptValue = acidValue - (slopeValue*acidVoltage); //Interceptwert berechnen
+    EEPROM_write(InterceptValueAddress, newInterceptValue); // Schreiben den neuen Intercept Wertes
+    Serial.print(F("Calibration Successful"));
+  }else{ 
+    Serial.print(F("Calibration Failed"));       
+    acidCalibrationFinish = 0;
+    alkaliCalibrationFinish = 0;
+  }
+      
 }
 
