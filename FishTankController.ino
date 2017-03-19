@@ -79,6 +79,7 @@ void setup() {
   delay(250);
 
   readCharacteristicValues(); //Lesen der Chrakteritstichen Werte für PH-Messung aus EEPROM
+  mySwitch.enableReceive(0); //Lesen auf PIN 2
   mySwitch.enableTransmit(10); //433MHz sender einschalten Change pin
 
   Serial1.begin(9600);
@@ -108,6 +109,8 @@ void setup() {
   Udp.begin(localPort); //UDP staten
   tempSensor.begin(); //Starten des Temperatursensors
 }
+
+
 
 void loop() {
   if (timeStatus() != timeNotSet) { //wenn die Zeit nicht aktuell ist wird sie mit NTP gesetzt
@@ -421,4 +424,54 @@ void calibrationScreen() {
   }
       
 }
+
+/*
+ * Empfangen von 433MHz
+ */
+
+ void receiveSwitch() {
+
+  if (mySwitch.available()) {
+    int value = mySwitch.getReceivedValue();
+    if (value == 0) {
+      return;
+    } else {
+      //TODO: Code to receive
+    }
+
+     mySwitch.resetAvailable();
+  }
+ }
+
+ /*
+  * Senden 433MHz
+  */
+
+  void sendSwitch() {
+
+    /* See Example: TypeA_WithDIPSwitches */
+    mySwitch.switchOn("11111", "00010");
+    delay(1000);
+    mySwitch.switchOff("11111", "00010");
+    delay(1000);
+  
+    /* Same switch as above, but using decimal code */
+    mySwitch.send(5393, 24);
+    delay(1000);  
+    mySwitch.send(5396, 24);
+    delay(1000);  
+  
+    /* Same switch as above, but using binary code */
+    mySwitch.send("000000000001010100010001");
+    delay(1000);  
+    mySwitch.send("000000000001010100010100");
+    delay(1000);
+  
+    /* Same switch as above, but tri-state code */ 
+    mySwitch.sendTriState("00000FFF0F0F");
+    delay(1000);  
+    mySwitch.sendTriState("00000FFF0FF0");
+    delay(1000);
+    
+  }
 
