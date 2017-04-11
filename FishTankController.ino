@@ -1,4 +1,4 @@
-#include <SD.h>
+//#include <SD.h>
 #include <Wire.h>
 #include <WiFiEsp.h>
 #include <WiFiEspClient.h>
@@ -6,6 +6,8 @@
 #include <WiFiEspUdp.h>
 #include <UTFT.h>
 #include <URTouch.h>
+#include <tinyFAT.h> // used to acess the SD card
+#include <UTFT_tinyFAT.h>  // used to read .raw images from the SD card
 #include <TimeLib.h>
 #include <DS1307RTC.h>
 #include <RCSwitch.h>
@@ -59,7 +61,9 @@ static float acidVoltage, alkaliVoltage;
 
 UTFT    myGLCD(ILI9341_16, 38, 39, 40, 41); //Parameters should be adjusted to your Display/Shield model
 URTouch  myTouch( 6, 5, 4, 3, 2);
+UTFT_tinyFAT myFiles(&myGLCD);  // start up an instance to read images from the SD card
 int currentPage;
+// 1-home, 2-power, 3-ph, 4-ph-calibrate,
 extern uint8_t BigFont[];
 RCSwitch mySwitch = RCSwitch();
 OneWire oneWire(11);   //Change Pin
@@ -73,13 +77,22 @@ void setup() {
   // Initial setup
   Serial.begin(115200); //startet seriellen Monitor
   Serial.println("Serial ready");
+  delay(50);
+  // init SD card
+  file.setSSpin(53);
+  Serial.println(file.initFAT(SPISPEED_VERYHIGH));
+  //pinMode(53, OUTPUT);
+  //Serial.println("SD-Card state :" + sdCard.init(SPI_HALF_SPEED,53));
+  //file.setSSpin(53);
+  //file.initFAT(SPISPEED_VERYHIGH);
 
   myGLCD.InitLCD();
-  myGLCD.clrScr();
   myTouch.InitTouch();
   myTouch.setPrecision(PREC_MEDIUM);
+  myGLCD.clrScr();
+  myFiles.loadBitmap(26,80,188,72,"iAqua.raw");
   Serial.println("LCD initied");
-  drawHomeScreen();
+  //drawHomeScreen();
   currentPage = 0;
 
   //readCharacteristicValues(); //Lesen der Chrakteritstichen Werte für PH-Messung aus EEPROM
